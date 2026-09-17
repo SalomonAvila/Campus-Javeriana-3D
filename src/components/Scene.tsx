@@ -168,38 +168,54 @@ function CameraRig({ focus, radius }: { focus: Focus | null; radius: number }) {
     | (THREE.EventDispatcher & { target: THREE.Vector3; update: () => void })
     | null;
   const camera = useThree((s) => s.camera);
-  const goal = useRef<THREE.Vector3 | null>(null);
-  const goalDistance = useRef(0);
+
+  const anim = useRef<{
+    startTarget: THREE.Vector3;
+    endTarget: THREE.Vector3;
+    startCam: THREE.Vector3;
+    endCam: THREE.Vector3;
+    startTime: number;
+    duration: number;
+  } | null>(null);
+
   const lastId = useRef<string | null>(null);
 
+  // Cancela la animación inmediatamente si el usuario mueve o arrastra la cámara manualmente
   useEffect(() => {
-    if (!focus) return;
+    if (!controls) return;
+    const onStart = () => {
+      anim.current = null;
+    };
+    (controls as any).addEventListener("start", onStart);
+    return () => {
+      (controls as any).removeEventListener("start", onStart);
+    };
+  }, [controls]);
+
+  useEffect(() => {
+    if (!focus) {
+      anim.current = null;
+      lastId.current = null;
+      return;
+    }
     if (focus.id === lastId.current) return;
     lastId.current = focus.id;
-    goal.current = new THREE.Vector3(...focus.position);
-    // La distancia se escala con el tamaño del edificio, no con el del campus:
-    // una fracción fija del radio del campus deja la cámara pegada a los edificios
-    // pequeños y demasiado lejos de los grandes.
-    goalDistance.current = THREE.MathUtils.clamp(
+
+    if (!controls) return;
+
+    const startTarget = controls.target.clone();
+    const endTarget = new THREE.Vector3(...focus.position);
+
+    const goalDistance = THREE.MathUtils.clamp(
       focus.extent * 3.2,
       55,
       radius * 1.6,
     );
-  }, [focus, radius]);
 
-  useFrame((_, delta) => {
-    if (!goal.current || !controls) return;
+    const offset = camera.position.clone().sub(startTarget);
+    const direction = offset.length() > 1e-4 ? offset.normalize() : new THREE.Vector3(1, 1, 1).normalize();
 
-    const target = controls.target;
-    const offset = camera.position.clone().sub(target);
-    const current = offset.length();
-    if (current < 1e-6) return;
-
-    // Elevación mínima al enfocar. Sin esto, volar desde un ángulo casi horizontal
-    // mete la cámara DENTRO de los edificios que hay entre ella y el objetivo:
-    // se acerca en línea recta y no hay nada que la aparte. Subirla por encima de
-    // MIN_FOCUS_ELEVATION garantiza que mira el edificio desde arriba, despejada.
-    const direction = offset.clone().normalize();
+    // Ángulo mínimo sobre el horizonte para no atravesar fachadas
     const elevation = Math.asin(THREE.MathUtils.clamp(direction.y, -1, 1));
     if (elevation < MIN_FOCUS_ELEVATION) {
       const azimuth = Math.atan2(direction.x, direction.z);
@@ -211,21 +227,34 @@ function CameraRig({ focus, radius }: { focus: Focus | null; radius: number }) {
       );
     }
 
-    // Interpolación estable e independiente del framerate.
-    const t = 1 - Math.pow(0.0015, delta);
-    const nextDistance = THREE.MathUtils.lerp(current, goalDistance.current, t);
-    const wanted = direction.multiplyScalar(nextDistance);
-    offset.lerp(wanted, t);
+    const endCam = endTarget.clone().add(direction.multiplyScalar(goalDistance));
 
-    target.lerp(goal.current, t);
-    camera.position.copy(target).add(offset);
+    anim.current = {
+      startTarget,
+      endTarget,
+      startCam: camera.position.clone(),
+      endCam,
+      startTime: performance.now(),
+      duration: 800,
+    };
+  }, [focus, radius, controls, camera]);
+
+  useFrame(() => {
+    if (!anim.current || !controls) return;
+
+    const { startTarget, endTarget, startCam, endCam, startTime, duration } = anim.current;
+    const elapsed = performance.now() - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+
+    // Deceleración cúbica suave (ease-out)
+    const ease = 1 - Math.pow(1 - progress, 3);
+
+    controls.target.lerpVectors(startTarget, endTarget, ease);
+    camera.position.lerpVectors(startCam, endCam, ease);
     controls.update();
 
-    if (
-      target.distanceTo(goal.current) < 0.4 &&
-      Math.abs(offset.length() - goalDistance.current) < 0.5
-    ) {
-      goal.current = null;
+    if (progress >= 1) {
+      anim.current = null;
     }
   });
 

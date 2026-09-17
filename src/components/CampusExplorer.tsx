@@ -56,7 +56,10 @@ export function CampusExplorer({ data, terrain, places }: Props) {
   const select = useCallback(
     (id: string | null) => {
       setSelectedId(id);
-      if (!id) return;
+      if (!id) {
+        setFocus(null);
+        return;
+      }
       const p = byId.get(id);
       // `center` es [x, z] del mundo; se apunta a media altura del volumen.
       if (p) {
@@ -99,7 +102,7 @@ export function CampusExplorer({ data, terrain, places }: Props) {
             position: [radius * 1.1, radius * 1.45, radius * 1.95],
           }}
           gl={{ antialias: true, toneMapping: THREE.ACESFilmicToneMapping }}
-          onPointerMissed={() => setSelectedId(null)}
+          onPointerMissed={() => select(null)}
           onCreated={({ gl }) => {
             gl.domElement.addEventListener("webglcontextlost", () => setWebglFailed(true));
           }}
