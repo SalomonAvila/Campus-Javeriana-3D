@@ -5,6 +5,7 @@ import { useCallback, useMemo, useState } from "react";
 import * as THREE from "three";
 import { usePreparedBuildings, type PreparedBuilding } from "./Buildings";
 import { Scene, type Focus } from "./Scene";
+import { CATEGORY_STYLES } from "@/lib/materials";
 import type { CampusData, PlacesData, TerrainData } from "@/lib/types";
 
 type Props = { data: CampusData; terrain: TerrainData; places: PlacesData };
@@ -21,6 +22,7 @@ export function CampusExplorer({ data, terrain, places }: Props) {
   const [showTrees, setShowTrees] = useState(true);
   const [showAccesses, setShowAccesses] = useState(false);
   const [showServices, setShowServices] = useState(false);
+  const [selectedCategory, setSelectedCategory] = useState<string>("todos");
   const [query, setQuery] = useState("");
   const [includeUnnamed, setIncludeUnnamed] = useState(false);
   const [focus, setFocus] = useState<Focus | null>(null);
@@ -39,9 +41,20 @@ export function CampusExplorer({ data, terrain, places }: Props) {
       .filter((p) => !p.building.isPart)
       .filter((p) => includeUnnamed || p.building.name !== null)
       .filter((p) => {
+        if (selectedCategory === "todos") return true;
+        return p.building.category === selectedCategory;
+      })
+      .filter((p) => {
         if (!q) return true;
         const label = p.building.name ?? p.building.id;
-        return label.toLowerCase().includes(q) || p.building.kind.includes(q);
+        const cat = p.building.category ?? "";
+        const catLabel = CATEGORY_STYLES[cat]?.label ?? "";
+        return (
+          label.toLowerCase().includes(q) ||
+          p.building.kind.toLowerCase().includes(q) ||
+          cat.toLowerCase().includes(q) ||
+          catLabel.toLowerCase().includes(q)
+        );
       })
       .sort((a, b) => {
         const an = a.building.name;
@@ -51,7 +64,7 @@ export function CampusExplorer({ data, terrain, places }: Props) {
         if (bn) return 1;
         return a.building.id.localeCompare(b.building.id);
       });
-  }, [prepared, query, includeUnnamed]);
+  }, [prepared, query, includeUnnamed, selectedCategory]);
 
   const select = useCallback(
     (id: string | null) => {
@@ -159,13 +172,46 @@ export function CampusExplorer({ data, terrain, places }: Props) {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Buscar edificio…"
+          placeholder="Buscar edificio, categoría…"
           className="mx-3.5 mt-2.5 rounded-md border border-white/15 bg-white/5 px-2.5 py-1.5 text-xs outline-none placeholder:text-slate-500 focus:border-orange-400/60"
         />
+
+        {/* Filtros por categoría */}
+        <div className="flex gap-1 overflow-x-auto border-b border-white/10 px-3 py-2 text-[10px]">
+          <button
+            type="button"
+            onClick={() => setSelectedCategory("todos")}
+            className={`shrink-0 rounded-full px-2 py-0.5 transition-colors ${
+              selectedCategory === "todos"
+                ? "bg-white/20 font-bold text-white"
+                : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+            }`}
+          >
+            Todos
+          </button>
+          {Object.entries(CATEGORY_STYLES).map(([catKey, cat]) => (
+            <button
+              key={catKey}
+              type="button"
+              onClick={() => setSelectedCategory(catKey)}
+              className={`flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 transition-colors ${
+                selectedCategory === catKey
+                  ? "font-bold text-white shadow-sm"
+                  : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200"
+              }`}
+              style={selectedCategory === catKey ? { backgroundColor: cat.color } : {}}
+            >
+              <span>{cat.emoji}</span>
+              <span>{cat.label}</span>
+            </button>
+          ))}
+        </div>
 
         <div className="mt-1 flex-1 overflow-y-auto py-1">
           {listed.map((p) => {
             const active = p.building.id === selectedId;
+            const cat = p.building.category ? CATEGORY_STYLES[p.building.category] : null;
+
             return (
               <button
                 key={p.building.id}
@@ -180,7 +226,22 @@ export function CampusExplorer({ data, terrain, places }: Props) {
                     : "border-transparent text-slate-200 hover:bg-white/5",
                 ].join(" ")}
               >
-                {p.building.name ?? <span className="text-slate-400">Sin nombre en OSM</span>}
+                <div className="flex items-start justify-between gap-1.5">
+                  <span className="truncate font-medium">
+                    {p.building.name ?? <span className="text-slate-400">Sin nombre en OSM</span>}
+                  </span>
+                  {cat && (
+                    <span
+                      className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-medium"
+                      style={{
+                        backgroundColor: `${cat.color}25`,
+                        color: cat.color,
+                      }}
+                    >
+                      {cat.emoji} {cat.label}
+                    </span>
+                  )}
+                </div>
                 <span className="mt-0.5 block font-mono text-[9.5px] text-slate-400">
                   {p.building.kind} · {p.building.height} m
                   {p.building.levels ? ` · ${p.building.levels} niveles` : ""}
@@ -243,9 +304,23 @@ export function CampusExplorer({ data, terrain, places }: Props) {
           >
             ✕
           </button>
-          <h2 className="mb-2 pr-6 text-base font-bold leading-tight">
-            {selected.building.name ?? "Edificio sin nombre en OSM"}
-          </h2>
+          <div className="mb-2 pr-6">
+            {selected.building.category && CATEGORY_STYLES[selected.building.category] && (
+              <span
+                className="mb-1 inline-block rounded px-1.5 py-0.5 text-[10px] font-medium"
+                style={{
+                  backgroundColor: `${CATEGORY_STYLES[selected.building.category].color}25`,
+                  color: CATEGORY_STYLES[selected.building.category].color,
+                  border: `1px solid ${CATEGORY_STYLES[selected.building.category].color}40`,
+                }}
+              >
+                {CATEGORY_STYLES[selected.building.category].emoji} {CATEGORY_STYLES[selected.building.category].label}
+              </span>
+            )}
+            <h2 className="text-base font-bold leading-tight">
+              {selected.building.name ?? "Edificio sin nombre en OSM"}
+            </h2>
+          </div>
           <Row label="Tipo (OSM)" value={selected.building.kind} />
           {/* Los pisos que se ven en la fachada no siempre son dato de OSM: solo 68 de
               276 volúmenes traen `building:levels`. Cuando se deducen de la altura hay

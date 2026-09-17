@@ -72,7 +72,21 @@ const PALETTES: Record<string, string[]> = {
   garages: ["#8f8a80", "#9a9184"],
 };
 
-const DEFAULT_PALETTE = ["#9c5a43", "#8e4e37", "#a36149", "#948c82", "#b8aa9a", "#6a7680"];
+const DEFAULT_PALETTE = ["#8a8176", "#9d5e46", "#7a8288", "#948777"];
+
+/** Estilos y colores por categoría para los ALREDEDORES de la universidad */
+export const CATEGORY_STYLES: Record<string, { label: string; color: string; emoji: string }> = {
+  comida: { label: "Gastronomía", color: "#e67e22", emoji: "🍔" },
+  comercio: { label: "Comercio", color: "#3498db", emoji: "🛍️" },
+  salud: { label: "Salud", color: "#e74c3c", emoji: "🏥" },
+  finanzas: { label: "Finanzas", color: "#27ae60", emoji: "🏦" },
+  educacion: { label: "Educación", color: "#e0a96d", emoji: "📚" },
+  oficinas: { label: "Oficinas", color: "#5c768d", emoji: "🏢" },
+  cultura: { label: "Cultura", color: "#bfa15f", emoji: "🎭" },
+  residencial: { label: "Residencial", color: "#9c573f", emoji: "🏠" },
+  servicios: { label: "Servicios", color: "#7a8288", emoji: "📍" },
+  universidad: { label: "Javeriana", color: "#c2a184", emoji: "🎓" },
+};
 
 function seededHash(id: string): number {
   let h = 2166136261;
@@ -84,10 +98,25 @@ function seededHash(id: string): number {
 }
 
 export function resolveBuildingColor(b: Building): string {
+  // REGLA CRÍTICA: La universidad como tal NO se toca, conserva sus colores oficiales de OSM
+  if (b.category === "universidad") {
+    return b.colour ?? "#c2a184";
+  }
+
+  // Para los alrededores: si OSM traía un color explícito, se respeta; si no, se clasifica por categoría
   if (b.colour) return b.colour;
+
+  const cat = b.category ?? "servicios";
+  if (cat === "residencial") {
+    const palette = PALETTES.apartments;
+    return palette[seededHash(b.id) % palette.length];
+  }
+
+  const style = CATEGORY_STYLES[cat];
+  if (style) return style.color;
+
   const palette = PALETTES[b.kind] ?? DEFAULT_PALETTE;
-  const index = seededHash(b.id) % palette.length;
-  return palette[index];
+  return palette[seededHash(b.id) % palette.length];
 }
 
 const cache = new Map<string, THREE.MeshStandardMaterial>();

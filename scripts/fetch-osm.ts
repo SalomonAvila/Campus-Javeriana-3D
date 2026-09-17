@@ -43,6 +43,8 @@ type OsmElement = {
   id: number;
   tags?: OsmTags;
   geometry?: LatLon[];
+  lat?: number;
+  lon?: number;
   members?: { type: string; ref: number; role: string; geometry?: LatLon[] }[];
 };
 
@@ -250,25 +252,111 @@ async function main() {
   const bboxWest = west - MARGIN_M / mPerDegLon;
   const bboxEast = east + MARGIN_M / mPerDegLon;
 
-  console.log("→ Descargando edificios (Overpass)…");
+  console.log("→ Descargando edificios y POIs (Overpass)…");
   const bbox = `${bboxSouth},${bboxWest},${bboxNorth},${bboxEast}`;
   const elements = await overpass(
-    `[out:json][timeout:90];(` +
+    `[out:json][timeout:120];(` +
       `way["building"](${bbox});` +
       `relation["building"](${bbox});` +
       `way["building:part"](${bbox});` +
       `relation["building:part"](${bbox});` +
+      `node["amenity"](${bbox});` +
+      `node["shop"](${bbox});` +
+      `node["office"](${bbox});` +
+      `node["tourism"](${bbox});` +
+      `node["healthcare"](${bbox});` +
+      `node["addr:housenumber"](${bbox});` +
+      `way["addr:housenumber"](${bbox});` +
       `);out geom;`,
   );
   console.log(`  ${elements.length} elementos crudos en el bbox`);
 
   type Piece = { outer: LatLon[]; inners: LatLon[][] };
+  type Poi = { x: number; y: number; tags: OsmTags };
+
+  const buildingElements = elements.filter(
+    (e) => e.tags?.building != null || e.tags?.["building:part"] != null,
+  );
+  const poiElements = elements.filter(
+    (e) => e.tags?.building == null && e.tags?.["building:part"] == null,
+  );
+
+  const pois: Poi[] = [];
+  for (const el of poiElements) {
+    let lat = el.lat;
+    let lon = el.lon;
+    if (lat == null || lon == null) {
+      if (el.geometry && el.geometry.length > 0) {
+        lat = el.geometry[0].lat;
+        lon = el.geometry[0].lon;
+      }
+    }
+    if (lat != null && lon != null) {
+      pois.push({
+        x: +((lon - originLon) * mPerDegLon).toFixed(2),
+        y: +((lat - originLat) * M_PER_DEG_LAT).toFixed(2),
+        tags: el.tags ?? {},
+      });
+    }
+  }
+  console.log(`  ${buildingElements.length} edificios y ${pois.length} POIs/direcciones`);
+
+  function resolveOutsideCategory(bTags: OsmTags, insidePois: Poi[]): string {
+    const allTags = [bTags, ...insidePois.map((p) => p.tags)];
+
+    for (const t of allTags) {
+      if (
+        t.amenity === "restaurant" ||
+        t.amenity === "cafe" ||
+        t.amenity === "fast_food" ||
+        t.amenity === "bar" ||
+        t.amenity === "pub" ||
+        t.amenity === "food_court"
+      ) {
+        return "comida";
+      }
+    }
+    for (const t of allTags) {
+      if (t.shop || t.building === "commercial" || t.building === "retail" || t.amenity === "marketplace") {
+        return "comercio";
+      }
+    }
+    for (const t of allTags) {
+      if (t.amenity === "hospital" || t.amenity === "clinic" || t.amenity === "pharmacy" || t.healthcare) {
+        return "salud";
+      }
+    }
+    for (const t of allTags) {
+      if (t.amenity === "bank" || t.amenity === "atm") {
+        return "finanzas";
+      }
+    }
+    for (const t of allTags) {
+      if (t.amenity === "university" || t.amenity === "college" || t.amenity === "school" || t.office === "educational_institution") {
+        return "educacion";
+      }
+    }
+    for (const t of allTags) {
+      if (t.office || t.building === "office" || t.government) {
+        return "oficinas";
+      }
+    }
+    for (const t of allTags) {
+      if (t.amenity === "theatre" || t.amenity === "cinema" || t.amenity === "place_of_worship" || t.tourism === "museum") {
+        return "cultura";
+      }
+    }
+    if (bTags.building === "apartments" || bTags.building === "residential" || bTags.building === "house") {
+      return "residencial";
+    }
+    return "servicios";
+  }
 
   const buildings: unknown[] = [];
   let skippedOutside = 0;
   let skippedDegenerate = 0;
 
-  for (const el of elements) {
+  for (const el of buildingElements) {
     const tags = el.tags ?? {};
     let pieces: Piece[] = [];
 
@@ -325,6 +413,52 @@ async function main() {
       continue;
     }
 
+    // Determinar si cae dentro del campus oficial
+    const [cx, cy] = centroidLonLat(pieces[0].outer);
+    const isInsideCampus = pointInPolygon(cx, cy, campusPoly);
+
+    let finalName = tags.name ?? tags["name:es"] ?? null;
+    let category: string;
+
+    if (isInsideCampus) {
+      // La universidad se mantiene exactamente con sus datos oficiales (no tocar)
+      category = "universidad";
+    } else {
+      // Para los alrededores: cruzar con los POIs y direcciones que caen dentro de la huella
+      const outerRing = projected[0].outer;
+      const insidePois = pois.filter((p) => pointInPolygon(p.x, p.y, outerRing));
+
+      // Si no tiene nombre en la pared del edificio, hereda el nombre del negocio o dirección interior
+      if (!finalName) {
+        const namedPoi =
+          insidePois.find(
+            (p) =>
+              p.tags.name &&
+              (p.tags.amenity ||
+                p.tags.shop ||
+                p.tags.office ||
+                p.tags.tourism ||
+                p.tags.healthcare),
+          ) ?? insidePois.find((p) => p.tags.name);
+
+        if (namedPoi) {
+          finalName = namedPoi.tags.name!;
+        } else {
+          // Si no hay negocio pero hay dirección oficial
+          const addrPoi =
+            insidePois.find((p) => p.tags["addr:housenumber"]) ??
+            (tags["addr:housenumber"] ? { tags } : null);
+          if (addrPoi) {
+            const street = addrPoi.tags["addr:street"] ?? tags["addr:street"] ?? "";
+            const num = addrPoi.tags["addr:housenumber"]!;
+            finalName = street ? `${street} #${num}` : `Predio #${num}`;
+          }
+        }
+      }
+
+      category = resolveOutsideCategory(tags, insidePois);
+    }
+
     // Área en m² de la huella para calibrar la altura si no viene etiquetada
     const footprintM2 = Math.abs(signedArea(projected[0].outer));
     const height = num(tags.height) ?? fallbackHeight(tags, footprintM2);
@@ -334,8 +468,9 @@ async function main() {
 
     buildings.push({
       id: `${el.type === "relation" ? "relation" : "way"}/${el.id}`,
-      name: tags.name ?? tags["name:es"] ?? null,
+      name: finalName,
       kind,
+      category,
       isPart,
       height: +height.toFixed(2),
       minHeight: +minHeight.toFixed(2),

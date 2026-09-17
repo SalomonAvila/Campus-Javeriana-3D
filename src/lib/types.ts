@@ -12,6 +12,8 @@ export type Building = {
   name: string | null;
   /** valor del tag `building` (university, hospital, yes, …) */
   kind: string;
+  /** categoría funcional (universidad, comida, comercio, salud, finanzas, oficinas, residencial, cultura, servicios) */
+  category?: string;
   /** true si viene de `building:part` — es un detalle de otro edificio, no uno independiente */
   isPart: boolean;
   /** metros sobre el nivel del suelo hasta el punto más alto */
