@@ -30,7 +30,7 @@ const M_PER_DEG_LAT = 111_320;
  * (Cra. 7, Cll. 45) entran cortadas por la esquina del bbox y parecen callejones
  * sin salida. 100 m basta para cerrarlas sin arrastrar medio Chapinero.
  */
-const MARGIN_M = 100;
+const MARGIN_M = 200;
 
 /**
  * Overpass devuelve 429/504 con frecuencia en horario pico. Se rota entre instancias
@@ -182,8 +182,15 @@ function isClosedArea(tags: OsmTags, geometry: LatLon[]): boolean {
     Math.abs(first.lon - last.lon) < 1e-9;
   if (!closed) return false;
   if (tags.area === "yes") return true;
-  // landuse/leisure/natural cerrados son áreas por definición del esquema OSM.
-  return tags.landuse != null || tags.leisure != null || tags.natural != null;
+  // landuse/leisure/natural cerrados son áreas por definición del esquema OSM, igual que plazas y parqueaderos.
+  return (
+    tags.landuse != null ||
+    tags.leisure != null ||
+    tags.natural != null ||
+    tags.amenity === "parking" ||
+    tags.place === "square" ||
+    tags.man_made === "courtyard"
+  );
 }
 
 /**
@@ -336,10 +343,11 @@ async function main() {
           if (py < aMinY) aMinY = py;
           if (py > aMaxY) aMaxY = py;
         }
-        if (!pointInPolygon((aMinX + aMaxX) / 2, (aMinY + aMaxY) / 2, outline)) {
-          skippedOutside++;
-          continue;
-        }
+        // Se incluyen las áreas que caen en el bbox ampliado:
+        // if (!pointInPolygon((aMinX + aMaxX) / 2, (aMinY + aMaxY) / 2, outline)) {
+        //   skippedOutside++;
+        //   continue;
+        // }
 
         if (signedArea(o) < 0) o.reverse();
         const holes = inners

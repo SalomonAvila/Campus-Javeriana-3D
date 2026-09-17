@@ -2,8 +2,6 @@
 
 import { Line, OrbitControls } from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
-import { EffectComposer, N8AO, ToneMapping } from "@react-three/postprocessing";
-import { ToneMappingMode } from "postprocessing";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
@@ -139,12 +137,11 @@ function Ground({ data, radius }: { data: CampusData; radius: number }) {
 
   return (
     <group>
-      {/* Contexto urbano fuera del campus. Tiene que extenderse más allá del final de
-          la niebla (radius*7): si no, se ve el borde del plano y el campus parece una
-          isla flotando en el vacío al alejar la cámara. */}
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.6, 0]} receiveShadow>
+      {/* Contexto urbano fuera del campus: nivelado con la rasante de las calles para
+          que las manzanas de Chapinero no queden flotando sobre un vacío. */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]} receiveShadow>
         <planeGeometry args={[radius * 20, radius * 20]} />
-        <meshStandardMaterial color="#1b2733" roughness={1} />
+        <meshStandardMaterial color="#2c332e" roughness={1} />
       </mesh>
 
       {/* Superficie del campus, recortada con su contorno oficial (way/40739535).
@@ -259,51 +256,6 @@ function SidebarViewOffset({ left }: { left: number }) {
   return null;
 }
 
-/**
- * Oclusión ambiental.
- *
- * Es lo que más aporta a un modelo de volúmenes SIN TEXTURA: sin oscurecimiento de
- * contacto, un patio interior recibe la misma luz ambiente que una fachada despejada
- * y todo se lee como cartón recortado. El AO reintroduce esa diferencia.
- *
- * Dos detalles que rompen esto si se tocan sin querer:
- *
- * 1. `@react-three/postprocessing` fuerza `gl.toneMapping = NoToneMapping` mientras el
- *    composer está montado (three, además, desactiva el tone mapping al renderizar a
- *    un render target). Si no se repone ACES al final de la cadena, la escena sale
- *    quemada. Por eso <ToneMapping> va SIEMPRE el último.
- * 2. `multisampling` usa render targets multimuestreados de WebGL2, así que el MSAA
- *    del canvas se conserva y no hace falta SMAA. Se baja de 8 a 4 porque el coste no
- *    se nota a cambio y esta escena son 276 volúmenes de aristas duras.
- */
-function Effects({ enabled }: { enabled: boolean }) {
-  if (!enabled) return null;
-  return (
-    <EffectComposer multisampling={4}>
-      <N8AO
-        // En metros: es el alcance del oscurecimiento. Con 6 m se marcan el encuentro
-        // muro-suelo, los patios y los retranqueos entre volúmenes, sin ensuciar las
-        // fachadas planas. Muy por encima y el campus entero se ensombrece.
-        aoRadius={6}
-        distanceFalloff={1}
-        intensity={2.4}
-        // El ambiente de la escena es azulado (hemisphereLight #bcd4f0), así que la
-        // oclusión tiene que tirar a frío. En negro puro se ve sucia, no sombreada.
-        color="#101d2e"
-        quality="medium"
-        // A media resolución con reconstrucción por profundidad: el AO es de baja
-        // frecuencia y la diferencia no se aprecia, pero el coste cae a la mitad.
-        halfRes
-        depthAwareUpsampling
-        // Radio en mundo, no en pantalla: así el oscurecimiento de un patio es el
-        // mismo tanto si se mira de cerca como desde los 885 m del zoom máximo.
-        screenSpaceRadius={false}
-      />
-      <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-    </EffectComposer>
-  );
-}
-
 /** ~32°. Ángulo mínimo sobre el horizonte al que se sitúa la cámara al enfocar. */
 const MIN_FOCUS_ELEVATION = 0.56;
 
@@ -328,7 +280,6 @@ export type SceneProps = {
   hoveredId: string | null;
   showLabels: boolean;
   showTrees: boolean;
-  showAO: boolean;
   showAccesses: boolean;
   showServices: boolean;
   focus: Focus | null;
@@ -347,7 +298,6 @@ export function Scene({
   hoveredId,
   showLabels,
   showTrees,
-  showAO,
   showAccesses,
   showServices,
   focus,
@@ -413,8 +363,6 @@ export function Scene({
         maxPolarAngle={Math.PI / 2 - 0.04}
         target={[0, 0, 0]}
       />
-
-      <Effects enabled={showAO} />
     </>
   );
 }

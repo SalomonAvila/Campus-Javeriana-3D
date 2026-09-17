@@ -24,7 +24,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const OVERPASS = "https://overpass-api.de/api/interpreter";
+const ENDPOINTS = [
+  "https://overpass-api.de/api/interpreter",
+  "https://overpass.private.coffee/api/interpreter",
+  "https://overpass.kumi.systems/api/interpreter",
+];
 const CAMPUS_WAY_ID = 40739535;
 const CAMPUS_WIKIDATA = "Q1517478";
 const OUT_PATH = fileURLToPath(new URL("../src/data/campus.json", import.meta.url));
@@ -42,20 +46,38 @@ type OsmElement = {
   members?: { type: string; ref: number; role: string; geometry?: LatLon[] }[];
 };
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function overpass(query: string): Promise<OsmElement[]> {
-  const res = await fetch(OVERPASS, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      // Overpass responde 406 sin un User-Agent identificable.
-      "User-Agent": "campus-javeriana-3d/1.0 (proyecto académico; ingesta manual)",
-      Accept: "application/json",
-    },
-    body: "data=" + encodeURIComponent(query),
-  });
-  if (!res.ok) throw new Error(`Overpass ${res.status}: ${await res.text()}`);
-  const json = (await res.json()) as { elements?: OsmElement[] };
-  return json.elements ?? [];
+  let lastError = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    for (const endpoint of ENDPOINTS) {
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            // Overpass responde 406 sin un User-Agent identificable.
+            "User-Agent": "campus-javeriana-3d/1.0 (proyecto académico; ingesta manual)",
+            Accept: "application/json",
+          },
+          body: "data=" + encodeURIComponent(query),
+        });
+        if (!res.ok) {
+          lastError = `${endpoint} → HTTP ${res.status}`;
+          continue;
+        }
+        const json = (await res.json()) as { elements?: OsmElement[] };
+        return json.elements ?? [];
+      } catch (err) {
+        lastError = `${endpoint} → ${(err as Error).message}`;
+      }
+    }
+    const wait = 2000 * (attempt + 1);
+    console.warn(`  ⚠ Overpass no respondió (${lastError}); reintento en ${wait / 1000}s…`);
+    await sleep(wait);
+  }
+  throw new Error(`Overpass agotó los reintentos. Último error: ${lastError}`);
 }
 
 /** Ray casting. `poly` en [lon, lat]. */
@@ -112,22 +134,62 @@ function normalizeColour(v: string | undefined): string | undefined {
   return undefined;
 }
 
-/** Altura por defecto cuando OSM no la registra. */
-function fallbackHeight(tags: OsmTags): number {
+/** Infiere la tipología del edificio a partir de tags primarios y secundarios */
+function buildingKind(tags: OsmTags): string {
+  if (tags.building && tags.building !== "yes") return tags.building;
+  if (tags["building:part"] && tags["building:part"] !== "yes") return tags["building:part"];
+  if (tags.amenity === "university" || tags.amenity === "college" || tags.amenity === "school") return "university";
+  if (tags.amenity === "hospital" || tags.amenity === "clinic") return "hospital";
+  if (tags.amenity === "place_of_worship") return "church";
+  if (tags.office) return "office";
+  if (tags.shop) return "commercial";
+  if (tags.tourism === "hotel") return "hotel";
+  return tags.building ?? tags["building:part"] ?? "yes";
+}
+
+/** Altura realista según tipología, hitos conocidos y área de huella */
+function fallbackHeight(tags: OsmTags, footprintM2 = 0): number {
   const levels = num(tags["building:levels"]);
   if (levels != null) return levels * 3.2;
-  switch (tags.building) {
+
+  const name = (tags.name ?? tags["name:es"] ?? "").toLowerCase();
+  if (name.includes("ugi")) return 72; // Torre UGI: 22 pisos, ~72 m
+  if (name.includes("ecopetrol")) return 36; // Edificios Ecopetrol: ~11-12 plantas
+  if (name.includes("ministerio") || name.includes("anla")) return 28;
+  if (name.includes("car")) return 26;
+
+  const kind = buildingKind(tags);
+  switch (kind) {
     case "hospital":
-      return 12;
+    case "clinic":
+      return 18;
     case "university":
     case "college":
     case "school":
+      return 12;
+    case "apartments":
+      return 18; // ~5-6 pisos promedio en Chapinero
+    case "office":
+      return 22; // ~6-7 pisos
+    case "hotel":
+      return 20;
+    case "church":
+    case "chapel":
+      return 14;
+    case "commercial":
+    case "retail":
       return 9;
+    case "house":
+      return 8; // ~2.5 pisos
+    case "residential":
+      return 10;
     case "roof":
     case "shed":
       return 3;
     default:
-      return 6;
+      if (footprintM2 > 450) return 18; // bloque grande multifamiliar / oficinas
+      if (footprintM2 > 180) return 11; // edificio mediano de 3 pisos
+      return 7.5; // predio pequeño estándar de 2 plantas
   }
 }
 
@@ -182,8 +244,14 @@ async function main() {
   const originLon = (west + east) / 2;
   const mPerDegLon = M_PER_DEG_LAT * Math.cos((originLat * Math.PI) / 180);
 
+  const MARGIN_M = 200; // ~2 cuadras a la redonda
+  const bboxSouth = south - MARGIN_M / M_PER_DEG_LAT;
+  const bboxNorth = north + MARGIN_M / M_PER_DEG_LAT;
+  const bboxWest = west - MARGIN_M / mPerDegLon;
+  const bboxEast = east + MARGIN_M / mPerDegLon;
+
   console.log("→ Descargando edificios (Overpass)…");
-  const bbox = `${south},${west},${north},${east}`;
+  const bbox = `${bboxSouth},${bboxWest},${bboxNorth},${bboxEast}`;
   const elements = await overpass(
     `[out:json][timeout:90];(` +
       `way["building"](${bbox});` +
@@ -214,15 +282,8 @@ async function main() {
       continue;
     }
 
-    // Filtro de pertenencia al campus: centroide de la primera pieza.
-    const [cx, cy] = centroidLonLat(pieces[0].outer);
-    if (!pointInPolygon(cx, cy, campusPoly)) {
-      skippedOutside++;
-      continue;
-    }
-
     const isPart = tags["building:part"] != null && tags.building == null;
-    const height = num(tags.height) ?? fallbackHeight(tags);
+    const kind = buildingKind(tags);
     const minHeight = num(tags.min_height) ?? 0;
     const roofHeight = num(tags["roof:height"]) ?? 0;
     const roofShape = tags["roof:shape"];
@@ -264,13 +325,17 @@ async function main() {
       continue;
     }
 
+    // Área en m² de la huella para calibrar la altura si no viene etiquetada
+    const footprintM2 = Math.abs(signedArea(projected[0].outer));
+    const height = num(tags.height) ?? fallbackHeight(tags, footprintM2);
+
     // Redondeo a cm: recorta ~40% del peso del JSON sin diferencia visible.
     const round = (r: Ring): Ring => r.map(([x, y]) => [+x.toFixed(2), +y.toFixed(2)]);
 
     buildings.push({
       id: `${el.type === "relation" ? "relation" : "way"}/${el.id}`,
       name: tags.name ?? tags["name:es"] ?? null,
-      kind: tags.building ?? tags["building:part"] ?? "yes",
+      kind,
       isPart,
       height: +height.toFixed(2),
       minHeight: +minHeight.toFixed(2),
@@ -293,6 +358,21 @@ async function main() {
 
   const named = buildings.filter((b) => (b as { name: string | null }).name !== null);
 
+  let bMinX = Infinity;
+  let bMaxX = -Infinity;
+  let bMinY = Infinity;
+  let bMaxY = -Infinity;
+  for (const b of buildings as { parts: { outer: Ring }[] }[]) {
+    for (const part of b.parts) {
+      for (const [x, y] of part.outer) {
+        if (x < bMinX) bMinX = x;
+        if (x > bMaxX) bMaxX = x;
+        if (y < bMinY) bMinY = y;
+        if (y > bMaxY) bMaxY = y;
+      }
+    }
+  }
+
   const payload = {
     meta: {
       source: "OpenStreetMap contributors, ODbL 1.0",
@@ -303,8 +383,8 @@ async function main() {
       origin: { lat: originLat, lon: originLon },
       // Nota de convención para el consumidor:
       ringSpace: "shape-plane: [x = metros al este, y = metros al norte]",
-      widthM: +((east - west) * mPerDegLon).toFixed(1),
-      depthM: +((north - south) * M_PER_DEG_LAT).toFixed(1),
+      widthM: +(bMaxX - bMinX).toFixed(1),
+      depthM: +(bMaxY - bMinY).toFixed(1),
       buildingCount: buildings.length,
       namedCount: named.length,
     },

@@ -19,7 +19,6 @@ export function CampusExplorer({ data, terrain, places }: Props) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [showLabels, setShowLabels] = useState(true);
   const [showTrees, setShowTrees] = useState(true);
-  const [showAO, setShowAO] = useState(true);
   const [showAccesses, setShowAccesses] = useState(false);
   const [showServices, setShowServices] = useState(false);
   const [query, setQuery] = useState("");
@@ -114,7 +113,6 @@ export function CampusExplorer({ data, terrain, places }: Props) {
             hoveredId={hoveredId}
             showLabels={showLabels}
             showTrees={showTrees}
-            showAO={showAO}
             showAccesses={showAccesses}
             showServices={showServices}
             focus={focus}
@@ -218,8 +216,6 @@ export function CampusExplorer({ data, terrain, places }: Props) {
             on={showServices}
             onClick={() => setShowServices((v) => !v)}
           />
-          {/* El AO es lo más caro de la escena. Se deja apagable para GPUs integradas. */}
-          <Toggle label="Oclusión ambiental" on={showAO} onClick={() => setShowAO((v) => !v)} />
           <button
             type="button"
             onClick={() => {

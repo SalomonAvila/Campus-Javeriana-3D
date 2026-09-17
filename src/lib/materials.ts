@@ -50,30 +50,55 @@ const FINISHES: Record<string, Finish> = {
 
 const DEFAULT_FINISH: Finish = { roughness: 0.88, metalness: 0.02 };
 
-/** Color de respaldo cuando OSM no registra `building:colour`. */
-const KIND_COLOUR: Record<string, string> = {
-  university: "#c2a184",
-  college: "#c2a184",
-  school: "#c2a184",
-  hospital: "#b06a5c",
-  church: "#a8875a",
-  chapel: "#a8875a",
-  sports_hall: "#6f8f6a",
-  stadium: "#6f8f6a",
-  roof: "#8d8d8d",
-  shed: "#9a9184",
-  garage: "#8f8a80",
-  garages: "#8f8a80",
-  apartments: "#b8ada0",
-  residential: "#b8ada0",
-  office: "#9aa4ad",
-  yes: "#cabfae",
+/** Paletas de Chapinero (Bogotá) según tipología urbana: ladrillo bogotano, concreto, pañete y vidrio */
+const PALETTES: Record<string, string[]> = {
+  apartments: ["#9c5840", "#8e4a33", "#a8634a", "#8a8176", "#9d5e46", "#b26d54"],
+  house: ["#a15c43", "#8e4e37", "#98553f", "#c8b9a6", "#b4a390", "#94563f"],
+  residential: ["#9d5b41", "#8d4c35", "#ab6449", "#a1583e", "#b67b61", "#c9baaa"],
+  office: ["#5a6974", "#66747f", "#78848d", "#889199", "#4c5963"],
+  commercial: ["#6c7780", "#88837a", "#9a9186", "#7b8389", "#8a6652"],
+  retail: ["#7d858c", "#8d867c", "#948777", "#6d7882"],
+  hotel: ["#827568", "#928678", "#786d63", "#a09080"],
+  hospital: ["#a66355", "#98564a", "#8c4d42", "#8f8982"],
+  clinic: ["#a66355", "#98564a", "#8c8780"],
+  university: ["#c2a184", "#b59477", "#976a4a"],
+  college: ["#c2a184", "#b59477"],
+  school: ["#c2a184", "#b59477"],
+  church: ["#a8875a", "#96754a"],
+  chapel: ["#a8875a", "#96754a"],
+  roof: ["#7a7a7a", "#8d8d8d"],
+  shed: ["#8f867a", "#9a9184"],
+  garage: ["#8f8a80", "#9a9184"],
+  garages: ["#8f8a80", "#9a9184"],
 };
+
+const DEFAULT_PALETTE = ["#9c5a43", "#8e4e37", "#a36149", "#948c82", "#b8aa9a", "#6a7680"];
+
+function seededHash(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return Math.abs(h);
+}
+
+export function resolveBuildingColor(b: Building): string {
+  if (b.colour) return b.colour;
+  const palette = PALETTES[b.kind] ?? DEFAULT_PALETTE;
+  const index = seededHash(b.id) % palette.length;
+  return palette[index];
+}
 
 const cache = new Map<string, THREE.MeshStandardMaterial>();
 
-function resolveFinish(material: string | null): Finish {
-  if (!material) return DEFAULT_FINISH;
+function resolveFinish(material: string | null, kind?: string): Finish {
+  if (!material) {
+    if (kind === "office") return { roughness: 0.38, metalness: 0.28, envMapIntensity: 1.3 };
+    if (kind === "hospital" || kind === "clinic") return FINISHES.brick;
+    if (kind === "apartments" || kind === "house" || kind === "residential") return FINISHES.brick;
+    return DEFAULT_FINISH;
+  }
   const key = material.trim().toLowerCase();
   if (FINISHES[key]) return FINISHES[key];
   // OSM admite valores compuestos ("glass;metal", "brick,concrete")
@@ -224,9 +249,8 @@ function darken(hex: string, amount = 0.72): string {
  * ExtrudeGeometry (grupo 0 = tapas superior e inferior, grupo 1 = laterales).
  */
 export function materialsFor(b: Building): [THREE.MeshStandardMaterial, THREE.MeshStandardMaterial] {
-  const fallback = KIND_COLOUR[b.kind] ?? KIND_COLOUR.yes;
-  const wallColour = safeColour(b.colour, fallback);
-  const wallFinish = resolveFinish(b.material);
+  const wallColour = safeColour(b.colour, resolveBuildingColor(b));
+  const wallFinish = resolveFinish(b.material, b.kind);
 
   const roofColour = safeColour(b.roofColour, darken(wallColour));
   const roofFinish = resolveFinish(b.roofMaterial ?? b.material);
