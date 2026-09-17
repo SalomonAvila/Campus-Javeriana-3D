@@ -156,8 +156,16 @@ function resolveFinish(material: string | null, kind?: string): Finish {
  *   mundo y las mallas no llevan transformación propia (ver components/Buildings.tsx).
  *   Si alguna vez se les pone `position`, esto hay que pasarlo por `modelMatrix`.
  */
+export const nightModeUniform: { value: number } = { value: 0.0 };
+
+export function setNightMode(isNight: boolean) {
+  nightModeUniform.value = isNight ? 1.0 : 0.0;
+}
+
 function applyFloorBands(mat: THREE.MeshStandardMaterial) {
   mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uNightMode = nightModeUniform;
+
     shader.vertexShader = shader.vertexShader
       .replace(
         "#include <common>",
@@ -182,6 +190,7 @@ function applyFloorBands(mat: THREE.MeshStandardMaterial) {
       .replace(
         "#include <common>",
         `#include <common>
+        uniform float uNightMode;
         varying float vFloorCoord;
         varying float vFacadeU;
         varying float vHasFloors;`,
@@ -215,6 +224,16 @@ function applyFloorBands(mat: THREE.MeshStandardMaterial) {
         // El hueco es vidrio: bajar la rugosidad le da brillo especular y separa la
         // ventana del muro incluso a contraluz, donde el oscurecimiento no basta.
         roughnessFactor = mix(roughnessFactor, 0.22, wFloorMask);`,
+      )
+      .replace(
+        "#include <emissivemap_fragment>",
+        `#include <emissivemap_fragment>
+        if (vHasFloors > 0.5 && uNightMode > 0.0) {
+          float roomHash = fract(sin(floor(vFloorCoord) * 127.1 + floor(vFacadeU / 3.2) * 311.7) * 43758.5453);
+          float isLit = step(0.35, roomHash);
+          vec3 warmGlow = vec3(1.0, 0.84, 0.52) * 1.8;
+          totalEmissiveRadiance += warmGlow * (wFloorMask * isLit * uNightMode);
+        }`,
       );
   };
   // three avisa (con razón) de que dos materiales con onBeforeCompile distinto pueden

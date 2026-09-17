@@ -10,6 +10,7 @@ import { Labels } from "./Labels";
 import { Terrain } from "./Terrain";
 import { Places } from "./Places";
 import { buildCampusGround, campusOutlinePoints } from "@/lib/geometry";
+import { setNightMode } from "@/lib/materials";
 import type { CampusData, PlacesData, TerrainData } from "@/lib/types";
 
 /**
@@ -71,7 +72,13 @@ function castingBounds(prepared: PreparedBuilding[]): { center: THREE.Vector3; r
   return { center, radius };
 }
 
-function Sun({ bounds }: { bounds: { center: THREE.Vector3; radius: number } }) {
+function Sun({
+  bounds,
+  isNight = false,
+}: {
+  bounds: { center: THREE.Vector3; radius: number };
+  isNight?: boolean;
+}) {
   const ref = useRef<THREE.DirectionalLight>(null);
   const { center, radius } = bounds;
 
@@ -114,8 +121,8 @@ function Sun({ bounds }: { bounds: { center: THREE.Vector3; radius: number } }) 
     <directionalLight
       ref={ref}
       position={position}
-      intensity={2.1}
-      color="#fff2dc"
+      intensity={isNight ? 0.85 : 2.3}
+      color={isNight ? "#9fc2f0" : "#fff6e8"}
       castShadow
       // 4096² sobre un ortho de ~740 m da ~18 cm por texel, frente a los ~29 cm de
       // antes. Es lo que permite bajar el normalBias sin que aparezca acné.
@@ -129,7 +136,15 @@ function Sun({ bounds }: { bounds: { center: THREE.Vector3; radius: number } }) 
   );
 }
 
-function Ground({ data, radius }: { data: CampusData; radius: number }) {
+function Ground({
+  data,
+  radius,
+  isNight = false,
+}: {
+  data: CampusData;
+  radius: number;
+  isNight?: boolean;
+}) {
   const geometry = useMemo(() => buildCampusGround(data.campusOutline), [data.campusOutline]);
   const outline = useMemo(() => campusOutlinePoints(data.campusOutline, 0.6), [data.campusOutline]);
 
@@ -141,7 +156,7 @@ function Ground({ data, radius }: { data: CampusData; radius: number }) {
           que las manzanas de Chapinero no queden flotando sobre un vacío. */}
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.05, 0]} receiveShadow>
         <planeGeometry args={[radius * 20, radius * 20]} />
-        <meshStandardMaterial color="#2c332e" roughness={1} />
+        <meshStandardMaterial color={isNight ? "#141c26" : "#323b35"} roughness={1} />
       </mesh>
 
       {/* Superficie del campus, recortada con su contorno oficial (way/40739535).
@@ -150,10 +165,16 @@ function Ground({ data, radius }: { data: CampusData; radius: number }) {
           (landuse=grass, leisure=park), pintar la base de verde las volvía invisibles
           y exageraba la vegetación. Ahora el verde solo aparece donde OSM lo mapea. */}
       <mesh geometry={geometry} position={[0, 0, 0]} receiveShadow>
-        <meshStandardMaterial color="#4c5349" roughness={1} />
+        <meshStandardMaterial color={isNight ? "#212a23" : "#4e564b"} roughness={1} />
       </mesh>
 
-      <Line points={outline} color="#7fa88a" lineWidth={1.5} transparent opacity={0.55} />
+      <Line
+        points={outline}
+        color={isNight ? "#3a6042" : "#7fa88a"}
+        lineWidth={1.5}
+        transparent
+        opacity={0.55}
+      />
     </group>
   );
 }
@@ -311,6 +332,7 @@ export type SceneProps = {
   showTrees: boolean;
   showAccesses: boolean;
   showServices: boolean;
+  isNight?: boolean;
   focus: Focus | null;
   /** Ancho en px que la barra lateral tapa del canvas. */
   sidebarWidth: number;
@@ -329,6 +351,7 @@ export function Scene({
   showTrees,
   showAccesses,
   showServices,
+  isNight = false,
   focus,
   sidebarWidth,
   onSelect,
@@ -337,17 +360,32 @@ export function Scene({
   const radius = Math.max(data.meta.widthM, data.meta.depthM) / 2;
   const bounds = useMemo(() => castingBounds(prepared), [prepared]);
 
+  useEffect(() => {
+    setNightMode(Boolean(isNight));
+  }, [isNight]);
+
+  const bgColor = isNight ? "#080f1a" : "#96b4d6";
+
   return (
     <>
-      <color attach="background" args={["#0d1b2e"]} />
+      <color attach="background" args={[bgColor]} />
       {/* La niebla arranca más allá del campus completo: da profundidad sin ocultarlo. */}
-      <fog attach="fog" args={["#0d1b2e", radius * 2.4, radius * 7]} />
+      <fog
+        attach="fog"
+        args={[bgColor, radius * 2.2, isNight ? radius * 6.5 : radius * 7.2]}
+      />
 
       <EnvironmentLighting />
-      <hemisphereLight args={["#bcd4f0", "#3a3428", 0.75]} />
-      <Sun bounds={bounds} />
+      <hemisphereLight
+        args={
+          isNight
+            ? ["#1b293d", "#0c141d", 0.5]
+            : ["#ffffff", "#6e6250", 0.95]
+        }
+      />
+      <Sun bounds={bounds} isNight={isNight} />
 
-      <Ground data={data} radius={radius} />
+      <Ground data={data} radius={radius} isNight={isNight} />
 
       {/* Senderos, plazas, canchas y arbolado. Va después del suelo base y antes de
           los volúmenes: son superficies planas escalonadas en Y (ver lib/terrain.ts). */}
